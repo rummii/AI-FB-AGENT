@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
@@ -62,9 +63,6 @@ class OpenAICompatibleClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        if self.provider_name == "openrouter":
-            headers["X-Title"] = "AI Facebook News Agent"
-
         req = request.Request(
             url=f"{self.base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),
@@ -72,14 +70,26 @@ class OpenAICompatibleClient:
             method="POST",
         )
 
-        try:
-            with request.urlopen(req, timeout=60) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            details = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"AI request failed: {exc.code} {details}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"AI request failed: {exc.reason}") from exc
+        transient_statuses = {429, 500, 502, 503, 504}
+        max_attempts = 5
+        payload: dict[str, Any] | None = None
+        for attempt in range(max_attempts):
+            try:
+                with request.urlopen(req, timeout=60) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except error.HTTPError as exc:
+                details = exc.read().decode("utf-8", errors="ignore")
+                if exc.code not in transient_statuses or attempt == max_attempts - 1:
+                    raise RuntimeError(f"AI request failed: {exc.code} {details}") from exc
+                time.sleep(2**attempt)
+            except error.URLError as exc:
+                if attempt == max_attempts - 1:
+                    raise RuntimeError(f"AI request failed: {exc.reason}") from exc
+                time.sleep(2**attempt)
+
+        if payload is None:
+            raise RuntimeError("AI request failed without a response")
 
         message = _extract_message(payload)
         if not message:

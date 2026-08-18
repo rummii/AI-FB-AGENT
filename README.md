@@ -2,7 +2,7 @@
 Facebook news editor
 # AI Facebook News Agent
 
-Lightweight Python agent that fetches the latest AI news, generates a Facebook-ready post with OpenRouter or OpenAI, and publishes it to a Facebook page through the Graph API.
+Lightweight Python agent that fetches the latest AI news, generates a Facebook-ready post with Gemini or OpenAI, and publishes it to a Facebook page through the Graph API.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ app/
   providers/
     ai/
       base.py                     # AI client interface
-      openai_compatible.py        # OpenRouter/OpenAI-compatible client
+      openai_compatible.py        # Gemini/OpenAI-compatible client
     news/
       base.py                     # News provider interface
       newsapi_client.py           # NewsAPI primary source

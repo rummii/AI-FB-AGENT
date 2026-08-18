@@ -33,8 +33,8 @@ class Settings:
     ai_provider: str
     ai_api_key: str
     ai_model: str
-    openrouter_base_url: str
     openai_base_url: str
+    gemini_base_url: str
     news_provider: str
     news_api_key: str
     rss_feeds: list[str]
@@ -54,8 +54,12 @@ def load_settings(project_root: Path) -> Settings:
     data_dir = project_root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    ai_provider = os.getenv("AI_PROVIDER", "openrouter").strip().lower()
-    default_model = "openai/gpt-4o-mini" if ai_provider == "openrouter" else "gpt-4o-mini"
+    ai_provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    default_models = {
+        "openai": "gpt-4o-mini",
+        "gemini": "gemini-flash-latest",
+    }
+    default_model = default_models.get(ai_provider, "gpt-4o-mini")
 
     raw_feeds = os.getenv(
         "RSS_FEEDS",
@@ -76,8 +80,10 @@ def load_settings(project_root: Path) -> Settings:
         ai_provider=ai_provider,
         ai_api_key=os.getenv("AI_API_KEY", "").strip(),
         ai_model=os.getenv("AI_MODEL", default_model).strip(),
-        openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/"),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        gemini_base_url=os.getenv(
+            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+        ).rstrip("/"),
         news_provider=os.getenv("NEWS_PROVIDER", "newsapi").strip().lower(),
         news_api_key=os.getenv("NEWS_API_KEY", "").strip(),
         rss_feeds=[feed.strip() for feed in raw_feeds.split(",") if feed.strip()],

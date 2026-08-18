@@ -22,12 +22,12 @@ def _build_ai_client(settings: Settings) -> OpenAICompatibleClient:
     if not settings.ai_api_key:
         raise RuntimeError("AI_API_KEY is required")
 
-    if settings.ai_provider == "openrouter":
-        base_url = settings.openrouter_base_url
-    elif settings.ai_provider == "openai":
+    if settings.ai_provider == "openai":
         base_url = settings.openai_base_url
+    elif settings.ai_provider == "gemini":
+        base_url = settings.gemini_base_url
     else:
-        raise RuntimeError("AI_PROVIDER must be either 'openrouter' or 'openai'")
+        raise RuntimeError("AI_PROVIDER must be either 'openai' or 'gemini'")
 
     return OpenAICompatibleClient(
         provider_name=settings.ai_provider,
