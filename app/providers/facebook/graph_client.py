@@ -26,6 +26,7 @@ class FacebookGraphClient:
         payload = parse.urlencode(payload_data).encode("utf-8")
 
         req = request.Request(endpoint, data=payload, method="POST")
+        req.add_header("User-Agent", "ai-facebook-news-agent/1.0")
         try:
             with request.urlopen(req, timeout=30) as response:
                 return json.loads(response.read().decode("utf-8"))

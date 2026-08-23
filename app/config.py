@@ -11,6 +11,21 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_hour_list(value: str | None) -> list[int]:
+    """Parse '9,21' into [9, 21]. Invalid or out-of-range entries are dropped."""
+    if not value:
+        return []
+    hours: list[int] = []
+    for part in value.split(","):
+        try:
+            hour = int(part.strip())
+        except ValueError:
+            continue
+        if 0 <= hour <= 23 and hour not in hours:
+            hours.append(hour)
+    return hours
+
+
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
         return
@@ -46,6 +61,9 @@ class Settings:
     tone: str
     hours_back: int
     news_language: str
+    post_times: list[int]
+    post_timezone: str
+    min_post_interval_hours: float
 
 
 def load_settings(project_root: Path) -> Settings:
@@ -60,6 +78,14 @@ def load_settings(project_root: Path) -> Settings:
         "gemini": "gemini-flash-latest",
     }
     default_model = default_models.get(ai_provider, "gpt-4o-mini")
+
+    # AI_BASE_URL is a universal override: whatever provider you use, the client
+    # talks to this endpoint (e.g. https://api.groq.com/openai/v1 for Groq keys).
+    default_openai_base = (
+        "https://api.x.ai/v1"
+        if ai_provider in ("grok", "xai")
+        else "https://api.openai.com/v1"
+    )
 
     raw_feeds = os.getenv(
         "RSS_FEEDS",
@@ -80,9 +106,15 @@ def load_settings(project_root: Path) -> Settings:
         ai_provider=ai_provider,
         ai_api_key=os.getenv("AI_API_KEY", "").strip(),
         ai_model=os.getenv("AI_MODEL", default_model).strip(),
-        openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
-        gemini_base_url=os.getenv(
-            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+        openai_base_url=(
+            os.getenv("AI_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or default_openai_base
+        ).rstrip("/"),
+        gemini_base_url=(
+            os.getenv("AI_BASE_URL")
+            or os.getenv("GEMINI_BASE_URL")
+            or "https://generativelanguage.googleapis.com/v1beta/openai"
         ).rstrip("/"),
         news_provider=os.getenv("NEWS_PROVIDER", "newsapi").strip().lower(),
         news_api_key=os.getenv("NEWS_API_KEY", "").strip(),
@@ -95,4 +127,7 @@ def load_settings(project_root: Path) -> Settings:
         tone=os.getenv("POST_TONE", "concise, useful, and founder-friendly").strip(),
         hours_back=int(os.getenv("NEWS_LOOKBACK_HOURS", "48")),
         news_language=os.getenv("NEWS_LANGUAGE", "en").strip(),
+        post_times=_parse_hour_list(os.getenv("POST_TIMES")),
+        post_timezone=os.getenv("POST_TIMEZONE", "").strip(),
+        min_post_interval_hours=float(os.getenv("MIN_POST_INTERVAL_HOURS", "0")),
     )

@@ -19,7 +19,11 @@ This agent is a **scheduled CLI script** (not a web app), so "deployment" on cPa
 5. (Optional) If you have SSH, the equivalent is:
    ```bash
    cd ~
-   unzip ai-facebook-agent-deploy.zip
+   unzip -o ai-facebook-agent-deploy-fixed.zip
+   ```
+6. **When re-uploading updated code, clear Python's bytecode cache** so the new `.py` files actually run (otherwise the old compiled `.pyc` files can be used and you'll see unchanged behavior/tracebacks):
+   ```bash
+   find ~/fb-agent/app -name '__pycache__' -type d -exec rm -rf {} +
    ```
 
 > The zip intentionally does **not** contain `.env` (your secrets) or the SQLite history DB.
@@ -117,11 +121,49 @@ cPanel → **Advanced → Cron Jobs** (or **Cron Jobs**).
 
 The wrapper script `cron_agent.sh` changes to the right directory, then picks the best Python 3.10+ interpreter in this order: `AGENT_PYTHON` env var → project `venv` → cPanel virtualenv (`~/virtualenv/fb-agent/3.11/bin/python`) → system python3. All output is appended to `~/fb-agent/data/agent.log`.
 
+> **Before relying on the cron, make sure `DRY_RUN=false` in `~/fb-agent/.env`.** While
+> `DRY_RUN=true` the agent only *generates* posts and never publishes them — that is the
+> most common reason "nothing is posted".
+
 To adjust frequency, change the `*/4` to `*/2` (every 2 hours), `0 */6` isn't valid — use `0 */6` only in the Hour field style above; simplest alternatives:
 
 - Every 2 hours: `0 */2 * * *`
 - Every 6 hours: `0 */6 * * *`
 - Twice daily (9am & 9pm): `0 9,21 * * *`
+
+### Posting at exact local times regardless of server timezone
+
+cPanel cron runs in the **server's** timezone (often UTC), so `0 9 * * *` may fire at a
+different hour than you expect. Two ways to handle it:
+
+1. **Set the timezone in cPanel** — under **Advanced → Cron Jobs**, some hosts expose a
+   timezone dropdown; set it to your local zone and use the cron hours you want.
+2. **Or let the app enforce the time** (recommended, works even if you can't change the
+   cron timezone). In `~/fb-agent/.env`:
+   ```env
+   POST_TIMES=9,21                 # hours of the day (0-23) when posts are allowed
+   POST_TIMEZONE=America/New_York  # your IANA zone; empty = server local time
+   MIN_POST_INTERVAL_HOURS=6       # never post more often than every 6h
+   ```
+   Then set the cron job to run every few minutes instead of on an exact hour:
+   - Minute: `*/5`, Hour: `*`, Day: `*`, Month: `*`, Weekday: `*`
+   Every 5 minutes the agent checks whether the current hour is in `POST_TIMES`; outside
+   the window it logs `Skipping: current time is ...` and exits without posting. The
+   `MIN_POST_INTERVAL_HOURS` guard stops it posting twice inside the same hour.
+
+### Dry runs polluted the history DB — reset it
+
+`--dry-run` no longer records articles as posted, but runs you did *before* this update
+may have saved articles to `data/posts.db` that were never actually published. The agent
+skips anything already in that DB, so it may find "no unseen articles" and post nothing.
+Fix it once on the server:
+
+```bash
+cd ~/fb-agent
+/home/vsmwrurd/virtualenv/fb-agent/3.11/bin/python -m app.main --clear-history
+```
+
+or simply delete `~/fb-agent/data/posts.db` (it is recreated automatically).
 
 ---
 
@@ -137,8 +179,14 @@ To adjust frequency, change the `*/4` to `*/2` (every 2 hours), `0 */6` isn't va
 | Symptom | Fix |
 |---|---|
 | `ModuleNotFoundError: No module named 'app'` | Run as `python -m app.main` from inside `~/fb-agent` (the wrapper already does this). |
+| `Cron doesn't seem to run` | Check `data/agent.log`; make sure the script path matches your home dir, and your host's cron runs as your user. |
 | `TypeError: ... dataclass ... slots` | Your Python is < 3.10. Use Setup Python App (3.11/3.12) or ask your host. |
 | `Facebook credentials are missing` | `FACEBOOK_PAGE_ID` / `FACEBOOK_PAGE_ACCESS_TOKEN` not set in `.env`. |
-| `AI request failed: 401` | `AI_API_KEY` is wrong, or `AI_MODEL` isn't available for your key. |
-| `Cron doesn't seem to run` | Check `data/agent.log`; make sure the script path matches your home dir, and your host's cron runs as your user. |
+| `AI request failed: 401` | `AI_API_KEY` is wrong, or the client is hitting the wrong endpoint. The code reads `OPENAI_BASE_URL` / `GEMINI_BASE_URL` (or the `AI_BASE_URL` override) — a `AI_BASE_URL` value is used automatically, but if you use `OPENAI_BASE_URL` make sure it points at your provider (e.g. `https://api.groq.com/openai/v1` for Groq), and `AI_MODEL` is a model that provider supports. |
+| Updated code uploaded but behavior/tracebacks unchanged | Stale bytecode cache: run `find ~/fb-agent/app -name '__pycache__' -type d -exec rm -rf {} +` and re-run. |
+| `AI request failed: 403 ... error code: 1010` | Cloudflare blocks the default Python-urllib client. The code now sends a proper User-Agent and falls back to `curl` automatically — make sure you've re-uploaded the zip and cleared `__pycache__`. |
+| Cron runs but nothing is ever posted | `DRY_RUN` is still `true` in `.env` (set it to `false`). |
+| Cron runs but `agent.log` says `Nothing to post this run` | No unseen articles: run `python -m app.main --clear-history` (or delete `data/posts.db`) to reset history polluted by dry runs, and confirm the feeds are returning articles. |
+| Cron runs but `agent.log` says `Skipping: current time is ...` | `POST_TIMES` is set and the current hour isn't in it — that's the schedule working as configured. |
+| Post appears at the wrong hour | cPanel cron uses the server timezone; set `POST_TIMEZONE` + `POST_TIMES` (see Step 5) or change the cron timezone in cPanel. |
 | Post never appears on Facebook | Set `DRY_RUN=false` in `.env` and rerun manually to see the error. |

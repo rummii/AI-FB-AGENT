@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from app.models import GeneratedPost
@@ -43,6 +44,24 @@ class PostHistory:
                 (article_hash,),
             ).fetchone()
         return row is not None
+
+    def last_posted_at(self) -> datetime | None:
+        """Most recent post timestamp (UTC, as stored by SQLite CURRENT_TIMESTAMP)."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT MAX(created_at) FROM posted_articles").fetchone()
+        value = row[0] if row and row[0] else None
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    def clear(self) -> None:
+        """Delete all recorded posts, e.g. after dry runs polluted the history DB."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM posted_articles")
+            conn.commit()
 
     def save(self, post: GeneratedPost) -> None:
         with sqlite3.connect(self.db_path) as conn:
