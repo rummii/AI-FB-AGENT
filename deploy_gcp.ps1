@@ -206,26 +206,30 @@ $RunSecrets = "AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FAC
 $RunVolume = "name=state,type=cloud-storage,bucket=$Bucket"
 $RunVolumeMount = "volume=state,mount-path=$StateMountPath"
 
-# Use a temp file for --env-vars because values may contain commas,
+# Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
+# --env-vars-file expects YAML map syntax (KEY: "value"), not KEY=VALUE.
+function ConvertTo-YamlValue([string]$v) {
+    return $v.Replace('\', '\\').Replace('"', '\"')
+}
 $EnvVarsFile = [System.IO.Path]::GetTempFileName()
 @(
-    "AI_PROVIDER=$AiProviderVal",
-    "AI_MODEL=$AiModelVal",
-    "AI_BASE_URL=$AiBaseUrlVal",
-    "NEWS_PROVIDER=$NewsProviderVal",
-    "NEWS_LANGUAGE=$NewsLanguageVal",
-    "MAX_CANDIDATES=$MaxCandidatesVal",
-    "NEWS_LOOKBACK_HOURS=$NewsLookbackVal",
-    "MAX_POST_CHARS=$MaxPostCharsVal",
-    "DRY_RUN=$DryRun",
-    "MIN_POST_INTERVAL_HOURS=$MinPostIntervalVal",
-    "POST_TIMES=$PostTimesVal",
-    "POST_TIMEZONE=$PostTimezoneVal",
-    "POST_TONE=$PostToneVal",
-    "HISTORY_DB_PATH=$StateMountPath/posts.db",
-    "FACEBOOK_PAGE_ID=$FbPageIdVal",
-    "RSS_FEEDS=$RssFeedsVal"
+    "AI_PROVIDER: `"$(ConvertTo-YamlValue $AiProviderVal)`"",
+    "AI_MODEL: `"$(ConvertTo-YamlValue $AiModelVal)`"",
+    "AI_BASE_URL: `"$(ConvertTo-YamlValue $AiBaseUrlVal)`"",
+    "NEWS_PROVIDER: `"$(ConvertTo-YamlValue $NewsProviderVal)`"",
+    "NEWS_LANGUAGE: `"$(ConvertTo-YamlValue $NewsLanguageVal)`"",
+    "MAX_CANDIDATES: `"$(ConvertTo-YamlValue $MaxCandidatesVal)`"",
+    "NEWS_LOOKBACK_HOURS: `"$(ConvertTo-YamlValue $NewsLookbackVal)`"",
+    "MAX_POST_CHARS: `"$(ConvertTo-YamlValue $MaxPostCharsVal)`"",
+    "DRY_RUN: `"$(ConvertTo-YamlValue $DryRun)`"",
+    "MIN_POST_INTERVAL_HOURS: `"$(ConvertTo-YamlValue $MinPostIntervalVal)`"",
+    "POST_TIMES: `"$(ConvertTo-YamlValue $PostTimesVal)`"",
+    "POST_TIMEZONE: `"$(ConvertTo-YamlValue $PostTimezoneVal)`"",
+    "POST_TONE: `"$(ConvertTo-YamlValue $PostToneVal)`"",
+    "HISTORY_DB_PATH: `"$(ConvertTo-YamlValue "$StateMountPath/posts.db")`"",
+    "FACEBOOK_PAGE_ID: `"$(ConvertTo-YamlValue $FbPageIdVal)`"",
+    "RSS_FEEDS: `"$(ConvertTo-YamlValue $RssFeedsVal)`""
 ) | Set-Content -Path $EnvVarsFile -Encoding UTF8
 
 Write-Step "Ensuring Cloud Run Job '$JobName'"

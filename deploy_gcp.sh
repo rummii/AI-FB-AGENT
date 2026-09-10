@@ -217,26 +217,31 @@ gcloud builds submit \
 # ------------------------------------------------------------------
 # 7. Cloud Run Job (with gcsfuse state mount + secrets)
 # ------------------------------------------------------------------
-# Use a temp file for --env-vars because values may contain commas,
+# Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
+# --env-vars-file expects YAML map syntax (KEY: "value"), not KEY=VALUE.
 ENV_VARS_FILE=$(mktemp)
+yaml_escape() {
+  # Escape backslashes and double quotes for a YAML double-quoted scalar.
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
 cat <<ENVFILE > "$ENV_VARS_FILE"
-AI_PROVIDER=${AI_PROVIDER_VAL}
-AI_MODEL=${AI_MODEL_VAL}
-AI_BASE_URL=${AI_BASE_URL_VAL}
-NEWS_PROVIDER=${NEWS_PROVIDER_VAL}
-NEWS_LANGUAGE=${NEWS_LANGUAGE_VAL}
-MAX_CANDIDATES=${MAX_CANDIDATES_VAL}
-NEWS_LOOKBACK_HOURS=${NEWS_LOOKBACK_HOURS_VAL}
-MAX_POST_CHARS=${MAX_POST_CHARS_VAL}
-DRY_RUN=${DRY_RUN_VAL}
-MIN_POST_INTERVAL_HOURS=${MIN_POST_INTERVAL_HOURS_VAL}
-POST_TIMES=${POST_TIMES_VAL}
-POST_TIMEZONE=${POST_TIMEZONE_VAL}
-POST_TONE=${POST_TONE_VAL}
-HISTORY_DB_PATH=${STATE_MOUNT_PATH}/posts.db
-FACEBOOK_PAGE_ID=${FB_PAGE_ID_VAL}
-RSS_FEEDS=${RSS_FEEDS_VAL}
+AI_PROVIDER: "$(yaml_escape "${AI_PROVIDER_VAL}")"
+AI_MODEL: "$(yaml_escape "${AI_MODEL_VAL}")"
+AI_BASE_URL: "$(yaml_escape "${AI_BASE_URL_VAL}")"
+NEWS_PROVIDER: "$(yaml_escape "${NEWS_PROVIDER_VAL}")"
+NEWS_LANGUAGE: "$(yaml_escape "${NEWS_LANGUAGE_VAL}")"
+MAX_CANDIDATES: "$(yaml_escape "${MAX_CANDIDATES_VAL}")"
+NEWS_LOOKBACK_HOURS: "$(yaml_escape "${NEWS_LOOKBACK_HOURS_VAL}")"
+MAX_POST_CHARS: "$(yaml_escape "${MAX_POST_CHARS_VAL}")"
+DRY_RUN: "$(yaml_escape "${DRY_RUN_VAL}")"
+MIN_POST_INTERVAL_HOURS: "$(yaml_escape "${MIN_POST_INTERVAL_HOURS_VAL}")"
+POST_TIMES: "$(yaml_escape "${POST_TIMES_VAL}")"
+POST_TIMEZONE: "$(yaml_escape "${POST_TIMEZONE_VAL}")"
+POST_TONE: "$(yaml_escape "${POST_TONE_VAL}")"
+HISTORY_DB_PATH: "$(yaml_escape "${STATE_MOUNT_PATH}/posts.db")"
+FACEBOOK_PAGE_ID: "$(yaml_escape "${FB_PAGE_ID_VAL}")"
+RSS_FEEDS: "$(yaml_escape "${RSS_FEEDS_VAL}")"
 ENVFILE
 RUN_SECRETS="AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
 RUN_VOLUME="name=state,type=cloud-storage,bucket=${BUCKET}"
