@@ -91,7 +91,7 @@ $NewsProviderVal = Get-EnvOr "NEWS_PROVIDER" "newsapi"
 $NewsLanguageVal = Get-EnvOr "NEWS_LANGUAGE" "en"
 $MaxCandidatesVal = Get-EnvOr "MAX_CANDIDATES" "10"
 $NewsLookbackVal = Get-EnvOr "NEWS_LOOKBACK_HOURS" "48"
-$PostToneVal    = Get-EnvOr "POST_TONE" "concise, useful, and founder-friendly"
+$PostToneVal    = Get-EnvOr "POST_TONE" "concise useful and founder-friendly"
 $MaxPostCharsVal = Get-EnvOr "MAX_POST_CHARS" "420"
 if ([string]::IsNullOrWhiteSpace($DryRun)) { $DryRun = Get-EnvOr "DRY_RUN" "true" }
 $PostTimesVal   = Get-EnvOr "POST_TIMES" ""
@@ -202,10 +202,31 @@ gcloud builds submit `
 # ------------------------------------------------------------------
 # 7. Cloud Run Job (with gcsfuse state mount + secrets)
 # ------------------------------------------------------------------
-$RunEnvVars = "AI_PROVIDER=$AiProviderVal,AI_MODEL=$AiModelVal,AI_BASE_URL=$AiBaseUrlVal,NEWS_PROVIDER=$NewsProviderVal,NEWS_LANGUAGE=$NewsLanguageVal,MAX_CANDIDATES=$MaxCandidatesVal,NEWS_LOOKBACK_HOURS=$NewsLookbackVal,MAX_POST_CHARS=$MaxPostCharsVal,DRY_RUN=$DryRun,MIN_POST_INTERVAL_HOURS=$MinPostIntervalVal,POST_TIMES=$PostTimesVal,POST_TIMEZONE=$PostTimezoneVal,POST_TONE=$PostToneVal,HISTORY_DB_PATH=$StateMountPath/posts.db,FACEBOOK_PAGE_ID=$FbPageIdVal,RSS_FEEDS=$RssFeedsVal"
 $RunSecrets = "AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
 $RunVolume = "name=state,type=cloud-storage,bucket=$Bucket"
 $RunVolumeMount = "volume=state,mount-path=$StateMountPath"
+
+# Use a temp file for --env-vars because values may contain commas,
+# which conflict with the comma delimiter of --set-env-vars.
+$EnvVarsFile = [System.IO.Path]::GetTempFileName()
+@(
+    "AI_PROVIDER=$AiProviderVal",
+    "AI_MODEL=$AiModelVal",
+    "AI_BASE_URL=$AiBaseUrlVal",
+    "NEWS_PROVIDER=$NewsProviderVal",
+    "NEWS_LANGUAGE=$NewsLanguageVal",
+    "MAX_CANDIDATES=$MaxCandidatesVal",
+    "NEWS_LOOKBACK_HOURS=$NewsLookbackVal",
+    "MAX_POST_CHARS=$MaxPostCharsVal",
+    "DRY_RUN=$DryRun",
+    "MIN_POST_INTERVAL_HOURS=$MinPostIntervalVal",
+    "POST_TIMES=$PostTimesVal",
+    "POST_TIMEZONE=$PostTimezoneVal",
+    "POST_TONE=$PostToneVal",
+    "HISTORY_DB_PATH=$StateMountPath/posts.db",
+    "FACEBOOK_PAGE_ID=$FbPageIdVal",
+    "RSS_FEEDS=$RssFeedsVal"
+) | Set-Content -Path $EnvVarsFile -Encoding UTF8
 
 Write-Step "Ensuring Cloud Run Job '$JobName'"
 gcloud run jobs describe $JobName --region $Region --project $ProjectId 2>$null | Out-Null
@@ -216,7 +237,7 @@ if ($LASTEXITCODE -eq 0) {
         --project $ProjectId `
         --service-account $SaEmail `
         --set-secrets $RunSecrets `
-        --set-env-vars $RunEnvVars `
+        --env-vars-file $EnvVarsFile `
         --add-volume $RunVolume `
         --add-volume-mount $RunVolumeMount `
         --tasks 1 `
@@ -229,13 +250,14 @@ if ($LASTEXITCODE -eq 0) {
         --project $ProjectId `
         --service-account $SaEmail `
         --set-secrets $RunSecrets `
-        --set-env-vars $RunEnvVars `
+        --env-vars-file $EnvVarsFile `
         --add-volume $RunVolume `
         --add-volume-mount $RunVolumeMount `
         --tasks 1 `
         --max-retries $MaxRetries `
         --task-timeout $TaskTimeout
 }
+Remove-Item -Path $EnvVarsFile -Force
 
 # ------------------------------------------------------------------
 # 8. Cloud Scheduler trigger

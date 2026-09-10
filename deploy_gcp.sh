@@ -101,7 +101,7 @@ NEWS_PROVIDER_VAL="${NEWS_PROVIDER:-$(read_env NEWS_PROVIDER)}"; NEWS_PROVIDER_V
 NEWS_LANGUAGE_VAL="${NEWS_LANGUAGE:-$(read_env NEWS_LANGUAGE)}"; NEWS_LANGUAGE_VAL="${NEWS_LANGUAGE_VAL:-en}"
 MAX_CANDIDATES_VAL="${MAX_CANDIDATES:-$(read_env MAX_CANDIDATES)}"; MAX_CANDIDATES_VAL="${MAX_CANDIDATES_VAL:-10}"
 NEWS_LOOKBACK_HOURS_VAL="${NEWS_LOOKBACK_HOURS:-$(read_env NEWS_LOOKBACK_HOURS)}"; NEWS_LOOKBACK_HOURS_VAL="${NEWS_LOOKBACK_HOURS_VAL:-48}"
-POST_TONE_VAL="${POST_TONE:-$(read_env POST_TONE)}"; POST_TONE_VAL="${POST_TONE_VAL:-concise, useful, and founder-friendly}"
+POST_TONE_VAL="${POST_TONE:-$(read_env POST_TONE)}"; POST_TONE_VAL="${POST_TONE_VAL:-concise useful and founder-friendly}"
 MAX_POST_CHARS_VAL="${MAX_POST_CHARS:-$(read_env MAX_POST_CHARS)}"; MAX_POST_CHARS_VAL="${MAX_POST_CHARS_VAL:-420}"
 DRY_RUN_VAL="${DRY_RUN:-$(read_env DRY_RUN)}"; DRY_RUN_VAL="${DRY_RUN_VAL:-true}"
 POST_TIMES_VAL="${POST_TIMES:-$(read_env POST_TIMES)}"
@@ -217,7 +217,27 @@ gcloud builds submit \
 # ------------------------------------------------------------------
 # 7. Cloud Run Job (with gcsfuse state mount + secrets)
 # ------------------------------------------------------------------
-RUN_ENV_VARS="AI_PROVIDER=${AI_PROVIDER_VAL},AI_MODEL=${AI_MODEL_VAL},AI_BASE_URL=${AI_BASE_URL_VAL},NEWS_PROVIDER=${NEWS_PROVIDER_VAL},NEWS_LANGUAGE=${NEWS_LANGUAGE_VAL},MAX_CANDIDATES=${MAX_CANDIDATES_VAL},NEWS_LOOKBACK_HOURS=${NEWS_LOOKBACK_HOURS_VAL},MAX_POST_CHARS=${MAX_POST_CHARS_VAL},DRY_RUN=${DRY_RUN_VAL},MIN_POST_INTERVAL_HOURS=${MIN_POST_INTERVAL_HOURS_VAL},POST_TIMES=${POST_TIMES_VAL},POST_TIMEZONE=${POST_TIMEZONE_VAL},POST_TONE=${POST_TONE_VAL},HISTORY_DB_PATH=${STATE_MOUNT_PATH}/posts.db,FACEBOOK_PAGE_ID=${FB_PAGE_ID_VAL},RSS_FEEDS=${RSS_FEEDS_VAL}"
+# Use a temp file for --env-vars because values may contain commas,
+# which conflict with the comma delimiter of --set-env-vars.
+ENV_VARS_FILE=$(mktemp)
+cat <<ENVFILE > "$ENV_VARS_FILE"
+AI_PROVIDER=${AI_PROVIDER_VAL}
+AI_MODEL=${AI_MODEL_VAL}
+AI_BASE_URL=${AI_BASE_URL_VAL}
+NEWS_PROVIDER=${NEWS_PROVIDER_VAL}
+NEWS_LANGUAGE=${NEWS_LANGUAGE_VAL}
+MAX_CANDIDATES=${MAX_CANDIDATES_VAL}
+NEWS_LOOKBACK_HOURS=${NEWS_LOOKBACK_HOURS_VAL}
+MAX_POST_CHARS=${MAX_POST_CHARS_VAL}
+DRY_RUN=${DRY_RUN_VAL}
+MIN_POST_INTERVAL_HOURS=${MIN_POST_INTERVAL_HOURS_VAL}
+POST_TIMES=${POST_TIMES_VAL}
+POST_TIMEZONE=${POST_TIMEZONE_VAL}
+POST_TONE=${POST_TONE_VAL}
+HISTORY_DB_PATH=${STATE_MOUNT_PATH}/posts.db
+FACEBOOK_PAGE_ID=${FB_PAGE_ID_VAL}
+RSS_FEEDS=${RSS_FEEDS_VAL}
+ENVFILE
 RUN_SECRETS="AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
 RUN_VOLUME="name=state,type=cloud-storage,bucket=${BUCKET}"
 RUN_VOLUME_MOUNT="volume=state,mount-path=${STATE_MOUNT_PATH}"
@@ -230,7 +250,7 @@ if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_I
     --project "$PROJECT_ID" \
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
-    --set-env-vars "$RUN_ENV_VARS" \
+    --env-vars-file "$ENV_VARS_FILE" \
     --add-volume "$RUN_VOLUME" \
     --add-volume-mount "$RUN_VOLUME_MOUNT" \
     --tasks 1 \
@@ -243,13 +263,14 @@ else
     --project "$PROJECT_ID" \
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
-    --set-env-vars "$RUN_ENV_VARS" \
+    --env-vars-file "$ENV_VARS_FILE" \
     --add-volume "$RUN_VOLUME" \
     --add-volume-mount "$RUN_VOLUME_MOUNT" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"
 fi
+rm -f "$ENV_VARS_FILE"
 
 # ------------------------------------------------------------------
 # 8. Cloud Scheduler trigger
