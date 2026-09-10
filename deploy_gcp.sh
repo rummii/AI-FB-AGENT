@@ -220,7 +220,9 @@ gcloud builds submit \
 # Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
 # --env-vars-file expects YAML map syntax (KEY: "value"), not KEY=VALUE.
-ENV_VARS_FILE=$(mktemp)
+# The file lives in the project dir (not /tmp) so Windows gcloud can read it
+# when the script is run from Git Bash, where mktemp returns a POSIX path.
+ENV_VARS_FILE="${SCRIPT_DIR}/.env-vars.gcp.yaml"
 yaml_escape() {
   # Escape backslashes and double quotes for a YAML double-quoted scalar.
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'

@@ -93,3 +93,4 @@ sshdir.txt
 zipinfo.txt
 
 README.md
+.env-vars.gcp.yaml
