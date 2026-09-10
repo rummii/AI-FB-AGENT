@@ -256,6 +256,8 @@ RUN_SECRETS="AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEB
 
 log "Ensuring Cloud Run Job '${JOB_NAME}'"
 if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+  # --clear-volumes / --clear-volume-mounts drop the legacy gcsfuse volume left
+  # by earlier deployments; history now lives in Neon, so no volume is needed.
   gcloud run jobs update "$JOB_NAME" \
     --image "$IMAGE_URI" \
     --region "$REGION" \
@@ -263,6 +265,8 @@ if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_I
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
     --env-vars-file "$ENV_VARS_FILE_WIN" \
+    --clear-volumes \
+    --clear-volume-mounts \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"

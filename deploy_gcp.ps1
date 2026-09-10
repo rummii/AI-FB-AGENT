@@ -270,6 +270,8 @@ $EnvVarsFile = [System.IO.Path]::GetTempFileName()
 
 Write-Step "Ensuring Cloud Run Job '$JobName'"
 if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $ProjectId) -eq 0) {
+    # --clear-volumes / --clear-volume-mounts drop the legacy gcsfuse volume left
+    # by earlier deployments; history now lives in Neon, so no volume is needed.
     Invoke-Gcloud run jobs update $JobName `
         --image $ImageUri `
         --region $Region `
@@ -277,6 +279,8 @@ if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $
         --service-account $SaEmail `
         --set-secrets $RunSecrets `
         --env-vars-file $EnvVarsFile `
+        --clear-volumes `
+        --clear-volume-mounts `
         --tasks 1 `
         --max-retries $MaxRetries `
         --task-timeout $TaskTimeout | Out-Null
