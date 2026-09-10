@@ -236,6 +236,9 @@ $EnvVarsFile = [System.IO.Path]::GetTempFileName()
 Write-Step "Ensuring Cloud Run Job '$JobName'"
 gcloud run jobs describe $JobName --region $Region --project $ProjectId 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) {
+    # --clear-volumes / --clear-volume-mounts make the update idempotent: without
+    # them gcloud appends another volume + mount on every run, producing
+    # duplicate mounts and a "mount_path should be a valid unix absolute path" error.
     gcloud run jobs update $JobName `
         --image $ImageUri `
         --region $Region `
@@ -243,6 +246,8 @@ if ($LASTEXITCODE -eq 0) {
         --service-account $SaEmail `
         --set-secrets $RunSecrets `
         --env-vars-file $EnvVarsFile `
+        --clear-volumes `
+        --clear-volume-mounts `
         --add-volume $RunVolume `
         --tasks 1 `
         --max-retries $MaxRetries `

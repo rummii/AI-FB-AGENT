@@ -250,6 +250,9 @@ RUN_VOLUME="name=state,type=cloud-storage,bucket=${BUCKET},mount-path=${STATE_MO
 
 log "Ensuring Cloud Run Job '${JOB_NAME}'"
 if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+  # --clear-volumes / --clear-volume-mounts make the update idempotent: without
+  # them gcloud appends another volume + mount on every run, producing
+  # duplicate mounts and a "mount_path should be a valid unix absolute path" error.
   gcloud run jobs update "$JOB_NAME" \
     --image "$IMAGE_URI" \
     --region "$REGION" \
@@ -257,6 +260,8 @@ if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_I
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
     --env-vars-file "$ENV_VARS_FILE" \
+    --clear-volumes \
+    --clear-volume-mounts \
     --add-volume "$RUN_VOLUME" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
