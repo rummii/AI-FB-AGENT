@@ -1,49 +1,95 @@
 # ------------------------------------------------------------------
+
 # .dockerignore — keep secrets, local state, and build artifacts out of
+
 # the image build context.
+
 # ------------------------------------------------------------------
 
+
+
 # Secrets & local environment
+
 .env
+
 .env.*
+
 !.env.example
+
 !.env.gcp.example
 
+
+
 # Local state / runtime data (must NOT ship in the image)
+
 data/
+
 *.db
+
 *.log
 
+
+
 # Python bytecode / caches
+
 __pycache__/
+
 *.py[cod]
+
 *.pyo
+
 .venv/
+
 venv/
 
+
+
 # Version control & editor
+
 .git/
+
 .gitignore
+
 .vscode/
+
 .idea/
 
-# Deployment docs & shell helpers that are not needed at runtime
+
+
+# Deployment docs & shell helpers not needed inside the image
+
 DEPLOY_CPANEL.md
+
 DEPLOY_GCP.md
+
 cron_agent.sh
+
 deploy_gcp.sh
+
 deploy_gcp.ps1
+
 cloudbuild.yaml
-Dockerfile
+
 .dockerignore
 
+
+
 # Build artifacts / scratch files
+
 *.zip
+
 dns1.txt
+
 dryrun-test.log
+
 scpcheck.txt
+
 ssh-test1.txt
+
 sshcheck.txt
+
 sshdir.txt
+
 zipinfo.txt
+
 README.md

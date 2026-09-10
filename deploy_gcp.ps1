@@ -23,7 +23,8 @@ param(
     [string]$Bucket = "",
     [string]$StateMountPath = "/mnt/state",
     [string]$SchedulerName = "fb-agent-trigger",
-    [string]$Schedule = "*/30 * * * *",
+    [string]$Schedule = "0 11,18 * * *",
+    [string]$SchedulerTimeZone = "Asia/Manila",
     [string]$SaName = "fb-agent-runner",
     [string]$EnvFile = "",
     [string]$DryRun = "",
@@ -243,14 +244,14 @@ $ProjectNumber = (gcloud projects describe $ProjectId --format="value(projectNum
 $SchedulerSa = "$ProjectNumber-compute@developer.gserviceaccount.com"
 $JobUri = "https://$Region-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$ProjectId/jobs/${JobName}:run"
 
-Write-Step "Ensuring Cloud Scheduler job '$SchedulerName' ($Schedule UTC)"
+Write-Step "Ensuring Cloud Scheduler job '$SchedulerName' ($Schedule in $SchedulerTimeZone)"
 gcloud scheduler jobs describe $SchedulerName --location $Region --project $ProjectId 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) {
     gcloud scheduler jobs update http $SchedulerName `
         --location $Region `
         --project $ProjectId `
         --schedule $Schedule `
-        --time-zone "UTC" `
+        --time-zone $SchedulerTimeZone `
         --uri $JobUri `
         --http-method POST `
         --oauth-service-account-email $SchedulerSa
@@ -259,7 +260,7 @@ if ($LASTEXITCODE -eq 0) {
         --location $Region `
         --project $ProjectId `
         --schedule $Schedule `
-        --time-zone "UTC" `
+        --time-zone $SchedulerTimeZone `
         --uri $JobUri `
         --http-method POST `
         --oauth-service-account-email $SchedulerSa

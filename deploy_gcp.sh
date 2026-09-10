@@ -38,9 +38,11 @@ JOB_NAME="${JOB_NAME:-fb-agent-job}"
 BUCKET="${BUCKET:-${PROJECT_ID}-fb-agent-state}"
 STATE_MOUNT_PATH="${STATE_MOUNT_PATH:-/mnt/state}"
 SCHEDULER_NAME="${SCHEDULER_NAME:-fb-agent-trigger}"
-# Cloud Scheduler cron (UTC). Default: every 30 minutes. The app's POST_TIMES /
-# POST_TIMEZONE / MIN_POST_INTERVAL_HOURS gates decide whether it actually posts.
-SCHEDULE="${SCHEDULE:-*/30 * * * *}"
+# Cloud Scheduler cron (Asia/Manila timezone). Fires at 11:00 AM and 6:00 PM
+# Philippine Time daily. The app's POST_TIMES / POST_TIMEZONE /
+# MIN_POST_INTERVAL_HOURS gates decide whether it actually posts.
+SCHEDULE="${SCHEDULE:-0 11,18 * * *}"
+SCHEDULER_TIMEZONE="${SCHEDULER_TIMEZONE:-Asia/Manila}"
 # Runtime service account used by the Cloud Run Job and Scheduler.
 SA_NAME="${SA_NAME:-fb-agent-runner}"
 SA_EMAIL="${SA_EMAIL:-${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com}"
@@ -265,7 +267,7 @@ if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$REGION" --proje
     --location "$REGION" \
     --project "$PROJECT_ID" \
     --schedule "$SCHEDULE" \
-    --time-zone "UTC" \
+    --time-zone "$SCHEDULER_TIMEZONE" \
     --uri "$JOB_URI" \
     --http-method POST \
     --oauth-service-account-email "$SCHEDULER_SA"
@@ -274,7 +276,7 @@ else
     --location "$REGION" \
     --project "$PROJECT_ID" \
     --schedule "$SCHEDULE" \
-    --time-zone "UTC" \
+    --time-zone "$SCHEDULER_TIMEZONE" \
     --uri "$JOB_URI" \
     --http-method POST \
     --oauth-service-account-email "$SCHEDULER_SA"
