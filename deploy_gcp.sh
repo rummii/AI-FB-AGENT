@@ -220,14 +220,15 @@ gcloud builds submit \
 # Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
 # --env-vars-file expects YAML map syntax (KEY: "value"), not KEY=VALUE.
-# The file lives in the project dir (not /tmp) so Windows gcloud can read it
-# when the script is run from Git Bash, where mktemp returns a POSIX path.
-ENV_VARS_FILE="${SCRIPT_DIR}/.env-vars.gcp.yaml"
+# Write it into the project dir (not /tmp) so the Windows gcloud binary can
+# read it when this script runs under Git Bash, where mktemp returns a POSIX
+# path (/tmp/...) and SCRIPT_DIR is /c/Users/... rather than C:/Users/...
+ENV_VARS_FILE_WIN="$(cygpath -w "${SCRIPT_DIR}/.env-vars.gcp.yaml" 2>/dev/null || echo "${SCRIPT_DIR}/.env-vars.gcp.yaml")"
 yaml_escape() {
   # Escape backslashes and double quotes for a YAML double-quoted scalar.
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
-cat <<ENVFILE > "$ENV_VARS_FILE"
+cat <<ENVFILE > "${SCRIPT_DIR}/.env-vars.gcp.yaml"
 AI_PROVIDER: "$(yaml_escape "${AI_PROVIDER_VAL}")"
 AI_MODEL: "$(yaml_escape "${AI_MODEL_VAL}")"
 AI_BASE_URL: "$(yaml_escape "${AI_BASE_URL_VAL}")"
@@ -261,7 +262,7 @@ if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_I
     --project "$PROJECT_ID" \
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
-    --env-vars-file "$ENV_VARS_FILE" \
+    --env-vars-file "$ENV_VARS_FILE_WIN" \
     --clear-volumes \
     --clear-volume-mounts \
     --add-volume "$RUN_VOLUME" \
@@ -275,13 +276,13 @@ else
     --project "$PROJECT_ID" \
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
-    --env-vars-file "$ENV_VARS_FILE" \
+    --env-vars-file "$ENV_VARS_FILE_WIN" \
     --add-volume "$RUN_VOLUME" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"
 fi
-rm -f "$ENV_VARS_FILE"
+rm -f "${SCRIPT_DIR}/.env-vars.gcp.yaml"
 
 # ------------------------------------------------------------------
 # 8. Cloud Scheduler trigger
