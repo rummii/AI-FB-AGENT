@@ -33,6 +33,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# gcloud writes progress/info to stderr, which PowerShell surfaces as a
+# NativeCommandError and would abort the script under ErrorActionPreference=Stop.
+# We check $LASTEXITCODE explicitly instead, so only real failures stop us.
+if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 
 if ([string]::IsNullOrWhiteSpace($Bucket)) { $Bucket = "$ProjectId-fb-agent-state" }
 if ([string]::IsNullOrWhiteSpace($EnvFile)) { $EnvFile = Join-Path $PSScriptRoot ".env" }

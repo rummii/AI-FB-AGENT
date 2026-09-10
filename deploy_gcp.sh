@@ -27,6 +27,33 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------
+# Windows / Git-Bash guard.
+#
+# MSYS (Git for Windows) silently rewrites POSIX-looking paths inside command
+# arguments. Values like "mount-path=/mnt/state" become
+# "mount-path=C:/Program Files/Git/mnt/state", which makes `gcloud run jobs`
+# reject the volume mount ("should be a valid unix absolute path"). Rather than
+# fight the conversion, delegate to the native PowerShell deploy script, which
+# drives gcloud without MSYS translation.
+# ------------------------------------------------------------------
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v powershell.exe >/dev/null 2>&1; then
+      SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      echo "Detected Windows Git-Bash (MSYS). Delegating to deploy_gcp.ps1 to avoid"
+      echo "MSYS path mangling of the Cloud Run volume mount path."
+      exec powershell.exe -NoProfile -ExecutionPolicy Bypass \
+        -File "$(cygpath -w "${SELF_DIR}/deploy_gcp.ps1")" \
+        -ProjectId "${PROJECT_ID:-osiris-imhotep-507623}" \
+        -Region "${REGION:-us-central1}" \
+        ${SCHEDULE:+-Schedule "$SCHEDULE"} \
+        ${SCHEDULER_TIMEZONE:+-SchedulerTimeZone "$SCHEDULER_TIMEZONE"} \
+        ${DRY_RUN:+-DryRun "$DRY_RUN"}
+    fi
+    ;;
+esac
+
+# ------------------------------------------------------------------
 # Config — override any of these with environment variables.
 # ------------------------------------------------------------------
 PROJECT_ID="${PROJECT_ID:-osiris-imhotep-507623}"
