@@ -1,18 +1,25 @@
+# Secrets
 .env
-__pycache__/
-*.pyc
-data/*.db
+.env-vars.gcp.yaml
 
-# Deployment / build artifacts and scratch files (never commit these)
-*.zip
-*.log
+# Python
+__pycache__/
+*.py[cod]
+
+# Local state / scratch
+*.db
 data/
+*.log
+
+# Build artifacts
+*.zip
 venv/
 .venv/
+
+# Deployment scratch
 dns1.txt
 sshcheck.txt
 scpcheck.txt
 sshdir.txt
 ssh-test1.txt
 zipinfo.txt
-.env-vars.gcp.yaml

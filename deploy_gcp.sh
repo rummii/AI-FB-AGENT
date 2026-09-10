@@ -11,11 +11,11 @@
 # What it does (all steps are safe to re-run):
 #   1.  Selects the project and enables the required APIs.
 #   2.  Creates the Artifact Registry Docker repo.
-#   3.  Creates the GCS bucket that stores the SQLite history (state).
+#   3.  Creates the runtime service account and IAM bindings.
 #   4.  Creates a runtime service account and IAM bindings.
 #   5.  Creates Secret Manager secrets from your local .env.
 #   6.  Builds + pushes the image via Cloud Build.
-#   7.  Creates/updates the Cloud Run Job with a gcsfuse volume mount.
+#   7.  Creates/updates the Cloud Run Job (Neon DATABASE_URL secret + config).
 #   8.  Creates/updates the Cloud Scheduler job that runs the job on a cron.
 #
 # Prerequisites:
@@ -30,18 +30,16 @@ set -euo pipefail
 # Windows / Git-Bash guard.
 #
 # MSYS (Git for Windows) silently rewrites POSIX-looking paths inside command
-# arguments. Values like "mount-path=/mnt/state" become
-# "mount-path=C:/Program Files/Git/mnt/state", which makes `gcloud run jobs`
-# reject the volume mount ("should be a valid unix absolute path"). Rather than
-# fight the conversion, delegate to the native PowerShell deploy script, which
-# drives gcloud without MSYS translation.
+# arguments, which can corrupt values passed to gcloud. Rather than fight the
+# conversion, delegate to the native PowerShell deploy script, which drives
+# gcloud without MSYS translation.
 # ------------------------------------------------------------------
 case "$(uname -s 2>/dev/null || echo unknown)" in
   MINGW*|MSYS*|CYGWIN*)
     if command -v powershell.exe >/dev/null 2>&1; then
       SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
       echo "Detected Windows Git-Bash (MSYS). Delegating to deploy_gcp.ps1 to avoid"
-      echo "MSYS path mangling of the Cloud Run volume mount path."
+      echo "MSYS path mangling of gcloud arguments."
       exec powershell.exe -NoProfile -ExecutionPolicy Bypass \
         -File "$(cygpath -w "${SELF_DIR}/deploy_gcp.ps1")" \
         -ProjectId "${PROJECT_ID:-osiris-imhotep-507623}" \
@@ -62,8 +60,6 @@ REPO="${REPO:-fb-agent}"
 IMAGE="${IMAGE:-fb-agent}"
 TAG="${TAG:-latest}"
 JOB_NAME="${JOB_NAME:-fb-agent-job}"
-BUCKET="${BUCKET:-${PROJECT_ID}-fb-agent-state}"
-STATE_MOUNT_PATH="${STATE_MOUNT_PATH:-/mnt/state}"
 SCHEDULER_NAME="${SCHEDULER_NAME:-fb-agent-trigger}"
 # Cloud Scheduler cron (Asia/Manila timezone). Fires at 11:00 AM and 6:00 PM
 # Philippine Time daily. The app's POST_TIMES / POST_TIMEZONE /
@@ -111,8 +107,9 @@ read_env() {
 AI_API_KEY_VALUE="$(read_env AI_API_KEY)"
 NEWS_API_KEY_VALUE="$(read_env NEWS_API_KEY)"
 FB_TOKEN_VALUE="$(read_env FACEBOOK_PAGE_ACCESS_TOKEN)"
+DATABASE_URL_VALUE="$(read_env DATABASE_URL)"
 
-for pair in "AI_API_KEY:$AI_API_KEY_VALUE" "NEWS_API_KEY:$NEWS_API_KEY_VALUE" "FACEBOOK_PAGE_ACCESS_TOKEN:$FB_TOKEN_VALUE"; do
+for pair in "AI_API_KEY:$AI_API_KEY_VALUE" "NEWS_API_KEY:$NEWS_API_KEY_VALUE" "FACEBOOK_PAGE_ACCESS_TOKEN:$FB_TOKEN_VALUE" "DATABASE_URL:$DATABASE_URL_VALUE"; do
   name="${pair%%:*}"; value="${pair#*:}"
   if [[ -z "$value" ]]; then
     echo "ERROR: $name is missing or empty in $ENV_FILE." >&2
@@ -150,7 +147,6 @@ gcloud services enable \
   secretmanager.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
-  storage.googleapis.com \
   iam.googleapis.com \
   --project "$PROJECT_ID"
 
@@ -170,20 +166,7 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 3. GCS bucket for persistent state (SQLite history)
-# ------------------------------------------------------------------
-log "Ensuring GCS state bucket gs://${BUCKET} exists"
-if ! gcloud storage buckets describe "gs://${BUCKET}" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  gcloud storage buckets create "gs://${BUCKET}" \
-    --location="$REGION" \
-    --uniform-bucket-level-access \
-    --project "$PROJECT_ID"
-else
-  echo "    bucket already exists"
-fi
-
-# ------------------------------------------------------------------
-# 4. Service account + IAM
+# 3. Service account + IAM
 # ------------------------------------------------------------------
 log "Ensuring runtime service account ${SA_EMAIL}"
 if ! gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -196,14 +179,9 @@ else
   echo "    service account already exists"
 fi
 
-log "Granting bucket access to ${SA_EMAIL}"
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/storage.objectAdmin" \
-  --project "$PROJECT_ID" >/dev/null
 
 # ------------------------------------------------------------------
-# 5. Secrets in Secret Manager
+# 4. Secrets in Secret Manager
 # ------------------------------------------------------------------
 create_or_update_secret() {
   local name="$1" value="$2"
@@ -222,9 +200,10 @@ log "Syncing secrets from .env into Secret Manager"
 create_or_update_secret "AI_API_KEY" "$AI_API_KEY_VALUE"
 create_or_update_secret "NEWS_API_KEY" "$NEWS_API_KEY_VALUE"
 create_or_update_secret "FACEBOOK_PAGE_ACCESS_TOKEN" "$FB_TOKEN_VALUE"
+create_or_update_secret "DATABASE_URL" "$DATABASE_URL_VALUE"
 
 # Allow the runtime SA to read the secrets (works whether just created or not).
-for secret in AI_API_KEY NEWS_API_KEY FACEBOOK_PAGE_ACCESS_TOKEN; do
+for secret in AI_API_KEY NEWS_API_KEY FACEBOOK_PAGE_ACCESS_TOKEN DATABASE_URL; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:${SA_EMAIL}" \
     --role="roles/secretmanager.secretAccessor" \
@@ -232,7 +211,7 @@ for secret in AI_API_KEY NEWS_API_KEY FACEBOOK_PAGE_ACCESS_TOKEN; do
 done
 
 # ------------------------------------------------------------------
-# 6. Build + push the image (Cloud Build; no local Docker needed)
+# 5. Build + push the image (Cloud Build; no local Docker needed)
 # ------------------------------------------------------------------
 log "Building and pushing the image"
 gcloud builds submit \
@@ -242,7 +221,7 @@ gcloud builds submit \
   .
 
 # ------------------------------------------------------------------
-# 7. Cloud Run Job (with gcsfuse state mount + secrets)
+# 6. Cloud Run Job (stateless; Neon connection + secrets)
 # ------------------------------------------------------------------
 # Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
@@ -269,20 +248,14 @@ MIN_POST_INTERVAL_HOURS: "$(yaml_escape "${MIN_POST_INTERVAL_HOURS_VAL}")"
 POST_TIMES: "$(yaml_escape "${POST_TIMES_VAL}")"
 POST_TIMEZONE: "$(yaml_escape "${POST_TIMEZONE_VAL}")"
 POST_TONE: "$(yaml_escape "${POST_TONE_VAL}")"
-HISTORY_DB_PATH: "$(yaml_escape "${STATE_MOUNT_PATH}/posts.db")"
+
 FACEBOOK_PAGE_ID: "$(yaml_escape "${FB_PAGE_ID_VAL}")"
 RSS_FEEDS: "$(yaml_escape "${RSS_FEEDS_VAL}")"
 ENVFILE
-RUN_SECRETS="AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
-# For a single-container Cloud Run Job, the gcsfuse mount-path is supplied as a
-# key inside --add-volume (not via a separate --add-volume-mount).
-RUN_VOLUME="name=state,type=cloud-storage,bucket=${BUCKET},mount-path=${STATE_MOUNT_PATH}"
+RUN_SECRETS="AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest"
 
 log "Ensuring Cloud Run Job '${JOB_NAME}'"
 if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  # --clear-volumes / --clear-volume-mounts make the update idempotent: without
-  # them gcloud appends another volume + mount on every run, producing
-  # duplicate mounts and a "mount_path should be a valid unix absolute path" error.
   gcloud run jobs update "$JOB_NAME" \
     --image "$IMAGE_URI" \
     --region "$REGION" \
@@ -290,9 +263,6 @@ if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_I
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
     --env-vars-file "$ENV_VARS_FILE_WIN" \
-    --clear-volumes \
-    --clear-volume-mounts \
-    --add-volume "$RUN_VOLUME" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"
@@ -304,7 +274,6 @@ else
     --service-account "$SA_EMAIL" \
     --set-secrets "$RUN_SECRETS" \
     --env-vars-file "$ENV_VARS_FILE_WIN" \
-    --add-volume "$RUN_VOLUME" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"
@@ -312,7 +281,7 @@ fi
 rm -f "${SCRIPT_DIR}/.env-vars.gcp.yaml"
 
 # ------------------------------------------------------------------
-# 8. Cloud Scheduler trigger
+# 7. Cloud Scheduler trigger
 # ------------------------------------------------------------------
 # The Scheduler job calls the Cloud Run Admin API to execute the job. Cloud
 # Scheduler needs an OAuth service account; the Compute Engine default SA is
@@ -363,9 +332,9 @@ cat <<EOF
 Project:      ${PROJECT_ID}
 Region:       ${REGION}
 Image:        ${IMAGE_URI}
-Bucket:       gs://${BUCKET}   (mounted at ${STATE_MOUNT_PATH})
+History:      Neon (DATABASE_URL secret)
 Job:          ${JOB_NAME}
-Scheduler:    ${SCHEDULER_NAME}  (${SCHEDULE} UTC)
+Scheduler:    ${SCHEDULER_NAME}  (${SCHEDULE} ${SCHEDULER_TIMEZONE})
 
 Next steps:
   1) Run the job once manually to test (DRY_RUN=${DRY_RUN_VAL}):
@@ -380,5 +349,5 @@ Next steps:
          --update-env-vars DRY_RUN=false
 
   4) Reset posting history (if needed):
-       gcloud storage rm gs://${BUCKET}/posts.db
+       gcloud run jobs execute ${JOB_NAME} --region ${REGION} --project ${PROJECT_ID} --args=--clear-history --wait
 EOF

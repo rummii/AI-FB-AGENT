@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from app.models import Article
-from app.services.post_history import PostHistory
+from app.services.post_history import PostHistory, url_hash
 
 DEV_KEYWORDS = {
     "model": 7,
@@ -201,13 +201,17 @@ class NewsPipeline:
         if not articles:
             raise RuntimeError("No articles were fetched from NewsAPI or RSS feeds")
 
+        # Fetch the whole history once (a single query) and test candidates in
+        # memory, rather than issuing one database round-trip per article.
+        seen = self.history.seen_hashes()
+
         cutoff = datetime.now(timezone.utc) - timedelta(hours=self.hours_back)
         unique: dict[str, Article] = {}
         for article in articles:
             normalized_url = _normalize_url(article.url)
             if not normalized_url:
                 continue
-            if self.history.has_seen(normalized_url):
+            if url_hash(normalized_url) in seen:
                 continue
             if _hostname(normalized_url) in BLOCKED_DOMAINS:
                 continue

@@ -20,8 +20,6 @@ param(
     [string]$Image = "fb-agent",
     [string]$Tag = "latest",
     [string]$JobName = "fb-agent-job",
-    [string]$Bucket = "",
-    [string]$StateMountPath = "/mnt/state",
     [string]$SchedulerName = "fb-agent-trigger",
     [string]$Schedule = "0 11,18 * * *",
     [string]$SchedulerTimeZone = "Asia/Manila",
@@ -43,7 +41,7 @@ $ErrorActionPreference = "Continue"
 # The one place we DO want to fail hard is reading the local .env, handled by
 # explicit throw statements.
 
-if ([string]::IsNullOrWhiteSpace($Bucket)) { $Bucket = "$ProjectId-fb-agent-state" }
+# (no GCS bucket: history lives in Neon)
 if ([string]::IsNullOrWhiteSpace($EnvFile)) { $EnvFile = Join-Path $PSScriptRoot ".env" }
 
 $SaEmail = "$SaName@$ProjectId.iam.gserviceaccount.com"
@@ -120,10 +118,12 @@ function Read-EnvValue([string]$key) {
 $AiApiKeyValue = Read-EnvValue "AI_API_KEY"
 $NewsApiKeyValue = Read-EnvValue "NEWS_API_KEY"
 $FbTokenValue = Read-EnvValue "FACEBOOK_PAGE_ACCESS_TOKEN"
+$DatabaseUrlValue = Read-EnvValue "DATABASE_URL"
 
 if ([string]::IsNullOrWhiteSpace($AiApiKeyValue)) { throw "AI_API_KEY is missing or empty in $EnvFile." }
 if ([string]::IsNullOrWhiteSpace($NewsApiKeyValue)) { throw "NEWS_API_KEY is missing or empty in $EnvFile." }
 if ([string]::IsNullOrWhiteSpace($FbTokenValue)) { throw "FACEBOOK_PAGE_ACCESS_TOKEN is missing or empty in $EnvFile." }
+if ([string]::IsNullOrWhiteSpace($DatabaseUrlValue)) { throw "DATABASE_URL is missing or empty in $EnvFile." }
 
 function Get-EnvOr([string]$name, [string]$fallback) {
     $envValue = [Environment]::GetEnvironmentVariable($name)
@@ -181,20 +181,7 @@ if ((Test-GcloudResource artifacts repositories describe $Repo --location $Regio
 }
 
 # ------------------------------------------------------------------
-# 3. GCS bucket for persistent state (SQLite history)
-# ------------------------------------------------------------------
-Write-Step "Ensuring GCS state bucket gs://$Bucket exists"
-if ((Test-GcloudResource storage buckets describe "gs://$Bucket" --project $ProjectId) -ne 0) {
-    Invoke-Gcloud storage buckets create "gs://$Bucket" `
-        --location=$Region `
-        --uniform-bucket-level-access `
-        --project $ProjectId | Out-Null
-} else {
-    Write-Host "    bucket already exists"
-}
-
-# ------------------------------------------------------------------
-# 4. Service account + IAM
+# 3. Service account + IAM
 # ------------------------------------------------------------------
 Write-Step "Ensuring runtime service account $SaEmail"
 if ((Test-GcloudResource iam service-accounts describe $SaEmail --project $ProjectId) -ne 0) {
@@ -206,14 +193,9 @@ if ((Test-GcloudResource iam service-accounts describe $SaEmail --project $Proje
     Write-Host "    service account already exists"
 }
 
-Write-Step "Granting bucket access to $SaEmail"
-Invoke-Gcloud storage buckets add-iam-policy-binding "gs://$Bucket" `
-    --member="serviceAccount:$SaEmail" `
-    --role="roles/storage.objectAdmin" `
-    --project $ProjectId | Out-Null
 
 # ------------------------------------------------------------------
-# 5. Secrets in Secret Manager
+# 4. Secrets in Secret Manager
 # ------------------------------------------------------------------
 function Set-GcpSecret([string]$name, [string]$value) {
     $tmp = New-TemporaryFile
@@ -236,8 +218,9 @@ Write-Step "Syncing secrets from .env into Secret Manager"
 Set-GcpSecret "AI_API_KEY" $AiApiKeyValue
 Set-GcpSecret "NEWS_API_KEY" $NewsApiKeyValue
 Set-GcpSecret "FACEBOOK_PAGE_ACCESS_TOKEN" $FbTokenValue
+Set-GcpSecret "DATABASE_URL" $DatabaseUrlValue
 
-foreach ($secret in @("AI_API_KEY", "NEWS_API_KEY", "FACEBOOK_PAGE_ACCESS_TOKEN")) {
+foreach ($secret in @("AI_API_KEY", "NEWS_API_KEY", "FACEBOOK_PAGE_ACCESS_TOKEN", "DATABASE_URL")) {
     Invoke-Gcloud secrets add-iam-policy-binding $secret `
         --member="serviceAccount:$SaEmail" `
         --role="roles/secretmanager.secretAccessor" `
@@ -245,7 +228,7 @@ foreach ($secret in @("AI_API_KEY", "NEWS_API_KEY", "FACEBOOK_PAGE_ACCESS_TOKEN"
 }
 
 # ------------------------------------------------------------------
-# 6. Build + push the image (Cloud Build; no local Docker needed)
+# 5. Build + push the image (Cloud Build; no local Docker needed)
 # ------------------------------------------------------------------
 Write-Step "Building and pushing the image"
 Invoke-Gcloud builds submit `
@@ -255,12 +238,9 @@ Invoke-Gcloud builds submit `
     "." | Out-Null
 
 # ------------------------------------------------------------------
-# 7. Cloud Run Job (with gcsfuse state mount + secrets)
+# 6. Cloud Run Job (stateless; Neon connection + secrets)
 # ------------------------------------------------------------------
-$RunSecrets = "AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
-# For a single-container Cloud Run Job, the gcsfuse mount-path is supplied as a
-# key inside --add-volume (not via a separate --add-volume-mount).
-$RunVolume = "name=state,type=cloud-storage,bucket=$Bucket,mount-path=$StateMountPath"
+$RunSecrets = "AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest"
 
 # Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
@@ -283,16 +263,13 @@ $EnvVarsFile = [System.IO.Path]::GetTempFileName()
     "POST_TIMES: `"$(ConvertTo-YamlValue $PostTimesVal)`"",
     "POST_TIMEZONE: `"$(ConvertTo-YamlValue $PostTimezoneVal)`"",
     "POST_TONE: `"$(ConvertTo-YamlValue $PostToneVal)`"",
-    "HISTORY_DB_PATH: `"$(ConvertTo-YamlValue "$StateMountPath/posts.db")`"",
+
     "FACEBOOK_PAGE_ID: `"$(ConvertTo-YamlValue $FbPageIdVal)`"",
     "RSS_FEEDS: `"$(ConvertTo-YamlValue $RssFeedsVal)`""
 ) | Set-Content -Path $EnvVarsFile -Encoding UTF8
 
 Write-Step "Ensuring Cloud Run Job '$JobName'"
 if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $ProjectId) -eq 0) {
-    # --clear-volumes / --clear-volume-mounts make the update idempotent: without
-    # them gcloud appends another volume + mount on every run, producing
-    # duplicate mounts and a "mount_path should be a valid unix absolute path" error.
     Invoke-Gcloud run jobs update $JobName `
         --image $ImageUri `
         --region $Region `
@@ -300,9 +277,6 @@ if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $
         --service-account $SaEmail `
         --set-secrets $RunSecrets `
         --env-vars-file $EnvVarsFile `
-        --clear-volumes `
-        --clear-volume-mounts `
-        --add-volume $RunVolume `
         --tasks 1 `
         --max-retries $MaxRetries `
         --task-timeout $TaskTimeout | Out-Null
@@ -314,7 +288,6 @@ if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $
         --service-account $SaEmail `
         --set-secrets $RunSecrets `
         --env-vars-file $EnvVarsFile `
-        --add-volume $RunVolume `
         --tasks 1 `
         --max-retries $MaxRetries `
         --task-timeout $TaskTimeout | Out-Null
@@ -322,7 +295,7 @@ if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $
 Remove-Item -Path $EnvVarsFile -Force
 
 # ------------------------------------------------------------------
-# 8. Cloud Scheduler trigger
+# 7. Cloud Scheduler trigger
 # ------------------------------------------------------------------
 $ProjectNumber = (Get-GcloudOutput projects describe $ProjectId --format="value(projectNumber)" | Select-Object -First 1)
 $ProjectNumber = "$ProjectNumber".Trim()
@@ -371,7 +344,7 @@ Write-Host @"
 Project:      $ProjectId
 Region:       $Region
 Image:        $ImageUri
-Bucket:       gs://$Bucket   (mounted at $StateMountPath)
+History:      Neon (DATABASE_URL secret)
 Job:          $JobName
 Scheduler:    $SchedulerName  ($Schedule in $SchedulerTimeZone)
 
@@ -386,6 +359,6 @@ Next steps:
        gcloud run jobs update $JobName --region $Region --project $ProjectId --update-env-vars DRY_RUN=false
 
   4) Reset posting history (if needed):
-       gcloud storage rm gs://$Bucket/posts.db
+       gcloud run jobs execute $JobName --region $Region --project $ProjectId --args=--clear-history --wait
 "@
 

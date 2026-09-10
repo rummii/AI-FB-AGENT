@@ -43,8 +43,7 @@ def _load_dotenv(path: Path) -> None:
 @dataclass(slots=True)
 class Settings:
     project_root: Path
-    data_dir: Path
-    history_db_path: Path
+    database_url: str
     ai_provider: str
     ai_api_key: str
     ai_model: str
@@ -68,9 +67,6 @@ class Settings:
 
 def load_settings(project_root: Path) -> Settings:
     _load_dotenv(project_root / ".env")
-
-    data_dir = project_root / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
 
     ai_provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
     default_models = {
@@ -101,8 +97,7 @@ def load_settings(project_root: Path) -> Settings:
 
     return Settings(
         project_root=project_root,
-        data_dir=data_dir,
-        history_db_path=Path(os.getenv("HISTORY_DB_PATH", data_dir / "posts.db")),
+        database_url=os.getenv("DATABASE_URL", "").strip(),
         ai_provider=ai_provider,
         ai_api_key=os.getenv("AI_API_KEY", "").strip(),
         ai_model=os.getenv("AI_MODEL", default_model).strip(),

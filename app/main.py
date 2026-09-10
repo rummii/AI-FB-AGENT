@@ -139,11 +139,16 @@ def run() -> int:
     if args.dry_run:
         settings.dry_run = True
 
-    history = PostHistory(settings.history_db_path)
+    if not settings.database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required: a postgresql:// connection string, "
+            "e.g. postgresql://user:pass@host/db?sslmode=require"
+        )
+    history = PostHistory(settings.database_url)
 
     if args.clear_history:
         history.clear()
-        LOGGER.info("Cleared posting history (%s).", settings.history_db_path)
+        LOGGER.info("Cleared posting history.")
         return 0
 
     # Manual dry runs always run; only scheduled (non-dry-run) runs honor the window.
