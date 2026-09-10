@@ -82,7 +82,9 @@ class OpenAICompatibleClient:
             payload = self._post(url, body)
             message = _extract_message(payload)
             if message:
-                return message[:max_chars].strip()
+                # Return the full body: PostGenerator owns all length policy so
+                # that trimming is word-aware and never clips the URL.
+                return message.strip()
         raise RuntimeError("AI provider returned an empty post")
 
     def _post(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
