@@ -203,8 +203,9 @@ gcloud builds submit `
 # 7. Cloud Run Job (with gcsfuse state mount + secrets)
 # ------------------------------------------------------------------
 $RunSecrets = "AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
-$RunVolume = "name=state,type=cloud-storage,bucket=$Bucket"
-$RunVolumeMount = "volume=state,mount-path=$StateMountPath"
+# For a single-container Cloud Run Job, the gcsfuse mount-path is supplied as a
+# key inside --add-volume (not via a separate --add-volume-mount).
+$RunVolume = "name=state,type=cloud-storage,bucket=$Bucket,mount-path=$StateMountPath"
 
 # Use a temp YAML file for env vars because values may contain commas,
 # which conflict with the comma delimiter of --set-env-vars.
@@ -243,7 +244,6 @@ if ($LASTEXITCODE -eq 0) {
         --set-secrets $RunSecrets `
         --env-vars-file $EnvVarsFile `
         --add-volume $RunVolume `
-        --add-volume-mount $RunVolumeMount `
         --tasks 1 `
         --max-retries $MaxRetries `
         --task-timeout $TaskTimeout
@@ -256,7 +256,6 @@ if ($LASTEXITCODE -eq 0) {
         --set-secrets $RunSecrets `
         --env-vars-file $EnvVarsFile `
         --add-volume $RunVolume `
-        --add-volume-mount $RunVolumeMount `
         --tasks 1 `
         --max-retries $MaxRetries `
         --task-timeout $TaskTimeout

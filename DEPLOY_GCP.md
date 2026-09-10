@@ -245,8 +245,7 @@ gcloud run jobs create fb-agent-job \
   --region $REGION --project $PROJECT_ID \
   --set-secrets AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest \
   --set-env-vars AI_PROVIDER=openai,AI_MODEL=openai/gpt-oss-120b,AI_BASE_URL=https://api.groq.com/openai/v1,NEWS_PROVIDER=newsapi,NEWS_LANGUAGE=en,MAX_CANDIDATES=10,NEWS_LOOKBACK_HOURS=48,MAX_POST_CHARS=420,DRY_RUN=true,HISTORY_DB_PATH=/mnt/state/posts.db,FACEBOOK_PAGE_ID=<PAGE_ID> \
-  --add-volume name=state,type=cloud-storage,bucket=$PROJECT_ID-fb-agent-state \
-  --add-volume-mount volume=state,mount-path=/mnt/state \
+  --add-volume name=state,type=cloud-storage,bucket=$PROJECT_ID-fb-agent-state,mount-path=/mnt/state 
   --tasks 1 --max-retries 1 --task-timeout 600s
 
 # Scheduler

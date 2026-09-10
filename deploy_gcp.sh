@@ -244,8 +244,9 @@ FACEBOOK_PAGE_ID: "$(yaml_escape "${FB_PAGE_ID_VAL}")"
 RSS_FEEDS: "$(yaml_escape "${RSS_FEEDS_VAL}")"
 ENVFILE
 RUN_SECRETS="AI_API_KEY=AI_API_KEY:latest,NEWS_API_KEY=NEWS_API_KEY:latest,FACEBOOK_PAGE_ACCESS_TOKEN=FACEBOOK_PAGE_ACCESS_TOKEN:latest"
-RUN_VOLUME="name=state,type=cloud-storage,bucket=${BUCKET}"
-RUN_VOLUME_MOUNT="volume=state,mount-path=${STATE_MOUNT_PATH}"
+# For a single-container Cloud Run Job, the gcsfuse mount-path is supplied as a
+# key inside --add-volume (not via a separate --add-volume-mount).
+RUN_VOLUME="name=state,type=cloud-storage,bucket=${BUCKET},mount-path=${STATE_MOUNT_PATH}"
 
 log "Ensuring Cloud Run Job '${JOB_NAME}'"
 if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -257,7 +258,6 @@ if gcloud run jobs describe "$JOB_NAME" --region "$REGION" --project "$PROJECT_I
     --set-secrets "$RUN_SECRETS" \
     --env-vars-file "$ENV_VARS_FILE" \
     --add-volume "$RUN_VOLUME" \
-    --add-volume-mount "$RUN_VOLUME_MOUNT" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"
@@ -270,7 +270,6 @@ else
     --set-secrets "$RUN_SECRETS" \
     --env-vars-file "$ENV_VARS_FILE" \
     --add-volume "$RUN_VOLUME" \
-    --add-volume-mount "$RUN_VOLUME_MOUNT" \
     --tasks 1 \
     --max-retries "$JOB_MAX_RETRIES" \
     --task-timeout "$JOB_TASK_TIMEOUT"
