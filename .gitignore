@@ -2,3 +2,16 @@
 __pycache__/
 *.pyc
 data/*.db
+
+# Deployment / build artifacts and scratch files (never commit these)
+*.zip
+*.log
+data/
+venv/
+.venv/
+dns1.txt
+sshcheck.txt
+scpcheck.txt
+sshdir.txt
+ssh-test1.txt
+zipinfo.txt

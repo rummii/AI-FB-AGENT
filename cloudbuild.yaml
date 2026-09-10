@@ -1,0 +1,43 @@
+# ------------------------------------------------------------------
+# cloudbuild.yaml — build the agent image and push it to Artifact Registry.
+#
+# Run from the project root (no local Docker required):
+#
+#   gcloud builds submit \
+#     --config cloudbuild.yaml \
+#     --substitutions=_REGION=us-central1,_REPO=fb-agent,_IMAGE=fb-agent,_TAG=latest \
+#     --project osiris-imhotep-507623
+#
+# Or rely on the defaults below and just run:
+#   gcloud builds submit --config cloudbuild.yaml --project osiris-imhotep-507623
+# ------------------------------------------------------------------
+substitutions:
+  _REGION: us-central1
+  _REPO: fb-agent
+  _IMAGE: fb-agent
+  _TAG: latest
+
+steps:
+  # 1) Build the image from the repo root Dockerfile.
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+      - --file
+      - Dockerfile
+      - .
+
+  # 2) Push to Artifact Registry.
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
