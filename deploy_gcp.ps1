@@ -32,13 +32,16 @@ param(
     [int]$MaxRetries = 1
 )
 
-$ErrorActionPreference = "Stop"
-# gcloud writes progress/info to stderr, which PowerShell surfaces as a
-# NativeCommandError and would abort the script under ErrorActionPreference=Stop.
-# We check $LASTEXITCODE explicitly instead, so only real failures stop us.
-if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
-    $PSNativeCommandUseErrorActionPreference = $false
-}
+$ErrorActionPreference = "Continue"
+# NOTE: intentionally NOT "Stop". gcloud is a Python/native launcher that writes
+# progress and informational text to stderr (e.g. "[environment: untagged]",
+# "Encryption: Google-managed key"). Windows PowerShell 5.1 converts that
+# stderr noise into terminating NativeCommandErrors, which would abort the
+# deploy even though the gcloud command succeeded. Every gcloud call below goes
+# through Invoke-Gcloud / Test-GcloudResource, which capture output and let us
+# branch on $LASTEXITCODE instead.
+# The one place we DO want to fail hard is reading the local .env, handled by
+# explicit throw statements.
 
 if ([string]::IsNullOrWhiteSpace($Bucket)) { $Bucket = "$ProjectId-fb-agent-state" }
 if ([string]::IsNullOrWhiteSpace($EnvFile)) { $EnvFile = Join-Path $PSScriptRoot ".env" }
@@ -52,6 +55,46 @@ function Write-Step($message) {
 }
 function Write-Warn2($message) {
     Write-Host "[WARN] $message" -ForegroundColor Yellow
+}
+
+# Windows PowerShell 5.1 turns native stderr output into a terminating
+# NativeCommandError under ErrorActionPreference=Stop, even when the command
+# succeeded. gcloud writes almost everything (progress, "Encryption: ...",
+# "[environment: untagged]") to stderr, so every gcloud call must be wrapped.
+# This helper runs gcloud, merges stderr into stdout, and returns the exit code.
+function Invoke-Gcloud {
+    param(
+        [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+    # 2>&1 inside the script block keeps PowerShell from raising NativeCommandError.
+    $output = & gcloud @Arguments 2>&1
+    $exit = $LASTEXITCODE
+    if ($exit -ne 0) {
+        $output | ForEach-Object { Write-Host $_ }
+    }
+    return $exit
+}
+
+# Run a gcloud command and discard stdout/stderr, returning only the exit code.
+function Test-GcloudResource {
+    param(
+        [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+    $null = & gcloud @Arguments 2>&1
+    return $LASTEXITCODE
+}
+
+# Run a gcloud command and return its stdout as a string array (stderr merged,
+# then filtered out of the result). Use for reads like `projects describe`.
+function Get-GcloudOutput {
+    param(
+        [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+    $raw = & gcloud @Arguments 2>&1
+    return ($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
 }
 
 Set-Location -Path $PSScriptRoot
@@ -107,13 +150,13 @@ $FbPageIdVal    = Read-EnvValue "FACEBOOK_PAGE_ID"
 $RssFeedsVal    = Read-EnvValue "RSS_FEEDS"
 
 Write-Step "Deploying $ProjectId ($Region) image $ImageUri"
-gcloud config set project $ProjectId | Out-Null
+Invoke-Gcloud config set project $ProjectId | Out-Null
 
 # ------------------------------------------------------------------
 # 1. Enable APIs
 # ------------------------------------------------------------------
 Write-Step "Enabling required APIs"
-gcloud services enable `
+Invoke-Gcloud services enable `
     run.googleapis.com `
     cloudscheduler.googleapis.com `
     secretmanager.googleapis.com `
@@ -121,19 +164,18 @@ gcloud services enable `
     cloudbuild.googleapis.com `
     storage.googleapis.com `
     iam.googleapis.com `
-    --project $ProjectId
+    --project $ProjectId | Out-Null
 
 # ------------------------------------------------------------------
 # 2. Artifact Registry repo
 # ------------------------------------------------------------------
 Write-Step "Ensuring Artifact Registry repo '$Repo' exists"
-gcloud artifacts repositories describe $Repo --location $Region --project $ProjectId 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    gcloud artifacts repositories create $Repo `
+if ((Test-GcloudResource artifacts repositories describe $Repo --location $Region --project $ProjectId) -ne 0) {
+    Invoke-Gcloud artifacts repositories create $Repo `
         --repository-format=docker `
         --location=$Region `
         --description="AI Facebook News Agent images" `
-        --project $ProjectId
+        --project $ProjectId | Out-Null
 } else {
     Write-Host "    repo already exists"
 }
@@ -142,12 +184,11 @@ if ($LASTEXITCODE -ne 0) {
 # 3. GCS bucket for persistent state (SQLite history)
 # ------------------------------------------------------------------
 Write-Step "Ensuring GCS state bucket gs://$Bucket exists"
-gcloud storage buckets describe "gs://$Bucket" --project $ProjectId 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    gcloud storage buckets create "gs://$Bucket" `
+if ((Test-GcloudResource storage buckets describe "gs://$Bucket" --project $ProjectId) -ne 0) {
+    Invoke-Gcloud storage buckets create "gs://$Bucket" `
         --location=$Region `
         --uniform-bucket-level-access `
-        --project $ProjectId
+        --project $ProjectId | Out-Null
 } else {
     Write-Host "    bucket already exists"
 }
@@ -156,18 +197,17 @@ if ($LASTEXITCODE -ne 0) {
 # 4. Service account + IAM
 # ------------------------------------------------------------------
 Write-Step "Ensuring runtime service account $SaEmail"
-gcloud iam service-accounts describe $SaEmail --project $ProjectId 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    gcloud iam service-accounts create $SaName `
+if ((Test-GcloudResource iam service-accounts describe $SaEmail --project $ProjectId) -ne 0) {
+    Invoke-Gcloud iam service-accounts create $SaName `
         --display-name="AI Facebook News Agent runner" `
-        --project $ProjectId
+        --project $ProjectId | Out-Null
     Start-Sleep -Seconds 5
 } else {
     Write-Host "    service account already exists"
 }
 
 Write-Step "Granting bucket access to $SaEmail"
-gcloud storage buckets add-iam-policy-binding "gs://$Bucket" `
+Invoke-Gcloud storage buckets add-iam-policy-binding "gs://$Bucket" `
     --member="serviceAccount:$SaEmail" `
     --role="roles/storage.objectAdmin" `
     --project $ProjectId | Out-Null
@@ -180,12 +220,11 @@ function Set-GcpSecret([string]$name, [string]$value) {
     try {
         # Write without a trailing newline so the secret matches exactly.
         [System.IO.File]::WriteAllText($tmp.FullName, $value)
-        gcloud secrets describe $name --project $ProjectId 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            gcloud secrets create $name --data-file=$($tmp.FullName) --replication-policy=automatic --project $ProjectId | Out-Null
+        if ((Test-GcloudResource secrets describe $name --project $ProjectId) -ne 0) {
+            Invoke-Gcloud secrets create $name --data-file=$($tmp.FullName) --replication-policy=automatic --project $ProjectId | Out-Null
             Write-Host "    created secret $name"
         } else {
-            gcloud secrets versions add $name --data-file=$($tmp.FullName) --project $ProjectId | Out-Null
+            Invoke-Gcloud secrets versions add $name --data-file=$($tmp.FullName) --project $ProjectId | Out-Null
             Write-Host "    updated secret $name"
         }
     } finally {
@@ -194,16 +233,26 @@ function Set-GcpSecret([string]$name, [string]$value) {
 }
 
 Write-Step "Syncing secrets from .env into Secret Manager"
+Set-GcpSecret "AI_API_KEY" $AiApiKeyValue
+Set-GcpSecret "NEWS_API_KEY" $NewsApiKeyValue
+Set-GcpSecret "FACEBOOK_PAGE_ACCESS_TOKEN" $FbTokenValue
+
+foreach ($secret in @("AI_API_KEY", "NEWS_API_KEY", "FACEBOOK_PAGE_ACCESS_TOKEN")) {
+    Invoke-Gcloud secrets add-iam-policy-binding $secret `
+        --member="serviceAccount:$SaEmail" `
+        --role="roles/secretmanager.secretAccessor" `
+        --project $ProjectId | Out-Null
+}
 
 # ------------------------------------------------------------------
 # 6. Build + push the image (Cloud Build; no local Docker needed)
 # ------------------------------------------------------------------
 Write-Step "Building and pushing the image"
-gcloud builds submit `
+Invoke-Gcloud builds submit `
     --config cloudbuild.yaml `
     --substitutions="_REGION=$Region,_REPO=$Repo,_IMAGE=$Image,_TAG=$Tag" `
     --project $ProjectId `
-    "."
+    "." | Out-Null
 
 # ------------------------------------------------------------------
 # 7. Cloud Run Job (with gcsfuse state mount + secrets)
@@ -240,12 +289,11 @@ $EnvVarsFile = [System.IO.Path]::GetTempFileName()
 ) | Set-Content -Path $EnvVarsFile -Encoding UTF8
 
 Write-Step "Ensuring Cloud Run Job '$JobName'"
-gcloud run jobs describe $JobName --region $Region --project $ProjectId 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+if ((Test-GcloudResource run jobs describe $JobName --region $Region --project $ProjectId) -eq 0) {
     # --clear-volumes / --clear-volume-mounts make the update idempotent: without
     # them gcloud appends another volume + mount on every run, producing
     # duplicate mounts and a "mount_path should be a valid unix absolute path" error.
-    gcloud run jobs update $JobName `
+    Invoke-Gcloud run jobs update $JobName `
         --image $ImageUri `
         --region $Region `
         --project $ProjectId `
@@ -257,9 +305,9 @@ if ($LASTEXITCODE -eq 0) {
         --add-volume $RunVolume `
         --tasks 1 `
         --max-retries $MaxRetries `
-        --task-timeout $TaskTimeout
+        --task-timeout $TaskTimeout | Out-Null
 } else {
-    gcloud run jobs create $JobName `
+    Invoke-Gcloud run jobs create $JobName `
         --image $ImageUri `
         --region $Region `
         --project $ProjectId `
@@ -269,51 +317,50 @@ if ($LASTEXITCODE -eq 0) {
         --add-volume $RunVolume `
         --tasks 1 `
         --max-retries $MaxRetries `
-        --task-timeout $TaskTimeout
+        --task-timeout $TaskTimeout | Out-Null
 }
 Remove-Item -Path $EnvVarsFile -Force
 
 # ------------------------------------------------------------------
 # 8. Cloud Scheduler trigger
 # ------------------------------------------------------------------
-$ProjectNumber = (gcloud projects describe $ProjectId --format="value(projectNumber)").Trim()
+$ProjectNumber = (Get-GcloudOutput projects describe $ProjectId --format="value(projectNumber)" | Select-Object -First 1)
+$ProjectNumber = "$ProjectNumber".Trim()
 $SchedulerSa = "$ProjectNumber-compute@developer.gserviceaccount.com"
 $JobUri = "https://$Region-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$ProjectId/jobs/${JobName}:run"
 
 Write-Step "Ensuring Cloud Scheduler job '$SchedulerName' ($Schedule in $SchedulerTimeZone)"
-gcloud scheduler jobs describe $SchedulerName --location $Region --project $ProjectId 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    gcloud scheduler jobs update http $SchedulerName `
+if ((Test-GcloudResource scheduler jobs describe $SchedulerName --location $Region --project $ProjectId) -eq 0) {
+    Invoke-Gcloud scheduler jobs update http $SchedulerName `
         --location $Region `
         --project $ProjectId `
         --schedule $Schedule `
         --time-zone $SchedulerTimeZone `
         --uri $JobUri `
         --http-method POST `
-        --oauth-service-account-email $SchedulerSa
+        --oauth-service-account-email $SchedulerSa | Out-Null
 } else {
-    gcloud scheduler jobs create http $SchedulerName `
+    Invoke-Gcloud scheduler jobs create http $SchedulerName `
         --location $Region `
         --project $ProjectId `
         --schedule $Schedule `
         --time-zone $SchedulerTimeZone `
         --uri $JobUri `
         --http-method POST `
-        --oauth-service-account-email $SchedulerSa
+        --oauth-service-account-email $SchedulerSa | Out-Null
 }
 
-gcloud run jobs add-iam-policy-binding $JobName `
-    --region $Region `
-    --project $ProjectId `
-    --member="serviceAccount:$SchedulerSa" `
-    --role="roles/run.developer" 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
+if ((Test-GcloudResource run jobs add-iam-policy-binding $JobName `
+        --region $Region `
+        --project $ProjectId `
+        --member="serviceAccount:$SchedulerSa" `
+        --role="roles/run.developer") -ne 0) {
     Write-Warn2 "Could not add run.developer to $SchedulerSa; grant it manually if executions fail."
 }
-gcloud iam service-accounts add-iam-policy-binding $SchedulerSa `
+Invoke-Gcloud iam service-accounts add-iam-policy-binding $SchedulerSa `
     --member="serviceAccount:$SchedulerSa" `
     --role="roles/iam.serviceAccountUser" `
-    --project $ProjectId 2>$null | Out-Null
+    --project $ProjectId | Out-Null
 
 # ------------------------------------------------------------------
 # Done
@@ -326,7 +373,7 @@ Region:       $Region
 Image:        $ImageUri
 Bucket:       gs://$Bucket   (mounted at $StateMountPath)
 Job:          $JobName
-Scheduler:    $SchedulerName  ($Schedule UTC)
+Scheduler:    $SchedulerName  ($Schedule in $SchedulerTimeZone)
 
 Next steps:
   1) Run the job once manually to test (DRY_RUN=$DryRun):
@@ -341,15 +388,4 @@ Next steps:
   4) Reset posting history (if needed):
        gcloud storage rm gs://$Bucket/posts.db
 "@
-
-Set-GcpSecret "AI_API_KEY" $AiApiKeyValue
-Set-GcpSecret "NEWS_API_KEY" $NewsApiKeyValue
-Set-GcpSecret "FACEBOOK_PAGE_ACCESS_TOKEN" $FbTokenValue
-
-foreach ($secret in @("AI_API_KEY", "NEWS_API_KEY", "FACEBOOK_PAGE_ACCESS_TOKEN")) {
-    gcloud secrets add-iam-policy-binding $secret `
-        --member="serviceAccount:$SaEmail" `
-        --role="roles/secretmanager.secretAccessor" `
-        --project $ProjectId 2>$null | Out-Null
-}
 
